@@ -9,11 +9,11 @@ import sangria.schema.{ Argument, Field, IntType, InterfaceType, ListInputType, 
 
 object GraphQLSchema {
 
-  implicit val GraphQLDateTime = ScalarType[DateTime](
+  implicit val GraphQLDateTime: ScalarType[DateTime] = ScalarType[DateTime](
     "DateTime",
     coerceOutput = (dt, _) => dt.toString,
     coerceInput = {
-      case StringValue(dt, _, _, _, _ ) => DateTime.fromIsoDateTimeString(dt).toRight(DateTimeCoerceViolation)
+      case StringValue(dt, _, _, _, _) => DateTime.fromIsoDateTimeString(dt).toRight(DateTimeCoerceViolation)
       case _ => Left(DateTimeCoerceViolation)
     },
     coerceUserInput = {
@@ -29,123 +29,97 @@ object GraphQLSchema {
     )
   )
 
-  lazy val PlayerType: ObjectType[Unit, Player] = deriveObjectType[Unit, Player](
-    Interfaces(IdentifiableType)
-  )
 
-  lazy val TeamType: ObjectType[Unit, Team] = deriveObjectType[Unit, Team](
-    Interfaces(IdentifiableType),
-    AddFields(
-      Field("playerTeams", ListType(PlayerTeamType), resolve = c => playerTeamsFetcher.deferRelSeq(playerTeamByTeamRel, c.value.id))
+  val PlayerType: ObjectType[Unit, Player] = ObjectType[Unit, Player](
+    "Player",
+    fields[Unit, Player](
+      Field("id", IntType, resolve = _.value.id),
+      Field("name", StringType, resolve = _.value.name)
     )
   )
 
-  lazy val GameType: ObjectType[Unit, Game] = deriveObjectType[Unit, Game](
-    Interfaces(IdentifiableType)
-  )
+  // 1. We kunnen gebruik maken van macros om de ObjectTypes uit te schrijven.
+  //    Vervang de PlayerType de macro zoals hieronder uitgecommentarieerd staat:
+  //
+  //  lazy val PlayerType: ObjectType[Unit, Player] = deriveObjectType[Unit, Player](
+  //    Interfaces(IdentifiableType)
+  //  )
+  //
+  // 2. We kunnen op het moment 3 verschillende uitvragingen doen: allPlayers, player(id) en players(ids)
+  //    Check dat dit voor je werkt (sbt clean run om de server te draaien en ga naar http://localhost:9000/graphiql
+  //
+  // 3. Voeg deze operaties ook toe voor games, teams en matches en check dat het werkt
+  //    Gebruik bij match deze regel in de macro om ervoor te zorgen dat datums goed omgezet worden:
+  //    ReplaceField("playedAt", Field("playedAt", GraphQLDateTime, resolve = _.value.playedAt)),
+  //
+  // 4. Al deze entiteiten hebben nog geen relaties. Laten we de benodigde relaties toevoegen.
+  //    Gebruik ReplaceField voor een nieuw game veld in plaats van gameId:
+  //    ReplaceField("gameId",
+  //     Field("game", GameType, resolve = c => gamesFetcher.defer(c.value.gameId))
+  //    )
+  //
+  //    Doe dit ook voor het thuis team en het uit team in Match.
+  //
+  //    Doe dit ook voor Team en Player in PlayerTeam.
+  //
+  //
+  //    Gelaagde queries zou je nu moeten kunnen uitvragen vanaf match, dus bijvoorbeeld:
+  //    query {
+  //      allMatches {
+  //        homeTeam{
+  //          name
+  //        }
+  //        awayTeam {
+  //          name
+  //        }
+  //        homeScore
+  //        awayScore
+  //        playedAt
+  //      }
+  //    }
+  //
+  // 5. Een team bestaat uit een aantal spelers. Vooralsnog hebben we alleen de relaties naar 1 enkele entiteit aangepast. Om deze relatie op te zetten
+  //    moeten we een veld toevoegen aan het TeamType:
+  //    AddFields(
+  //      Field("playerTeams", ListType(PlayerTeamType), resolve = c => playerTeamsFetcher.deferRelSeq(playerTeamByTeamRel, c.value.id))
+  //    )
+  //
+  //    Ook moeten we een relatie definieren:
+  //    val playerTeamByTeamRel: Relation[PlayerTeam, PlayerTeam, Int] = Relation[PlayerTeam, Int]("byTeam", l => Seq(l.teamId))
+  //
+  //    En we moeten de fetcher laten weten hoe hier mee om kan gaan:
+  //    (ctx: MyContext, ids: RelationIds[PlayerTeam]) => ctx.dao.getPlayerTeamsByTeamId(ids)
+  //
+  //  6. We kunnen nu alleen nog maar spelers toe voegen (controleer dit in graphiQL!)
+  //     We willen echter ook de operaties createGame, createTeam, createMatch en addPlayerToTeam toevoegen.
+  //     Doe dit, de methoden zijn al aangemaakt in de DAO.
 
-  lazy val PlayerTeamType: ObjectType[Unit, PlayerTeam] = deriveObjectType[Unit, PlayerTeam](
-    Interfaces(IdentifiableType),
-    ReplaceField("playerId",
-      Field("player", PlayerType, resolve = c => playersFetcher.defer(c.value.playerId))
-    ),
-    ReplaceField("teamId",
-      Field("team", TeamType, resolve = c => teamsFetcher.defer(c.value.teamId))
-    )
-  )
-
-  lazy val MatchType: ObjectType[Unit, Match] = deriveObjectType[Unit, Match](
-    Interfaces(IdentifiableType),
-    ReplaceField("playedAt", Field("playedAt", GraphQLDateTime, resolve = _.value.playedAt)),
-    ReplaceField("gameId",
-      Field("game", GameType, resolve = c => gamesFetcher.defer(c.value.gameId))
-    ),
-    ReplaceField("homeTeamId",
-      Field("homeTeam", TeamType, resolve = c => teamsFetcher.defer(c.value.homeTeamId))
-    ),
-    ReplaceField("awayTeamId",
-      Field("awayTeam", TeamType, resolve = c => teamsFetcher.defer(c.value.awayTeamId))
-    )
-  )
-
-  val playerTeamByTeamRel: Relation[PlayerTeam, PlayerTeam, Int] = Relation[PlayerTeam, Int]("byTeam", l => Seq(l.teamId))
 
   val playersFetcher = Fetcher(
     (ctx: MyContext, ids: Seq[Int]) => ctx.dao.getPlayers(ids)
   )
 
-  val teamsFetcher = Fetcher(
-    (ctx: MyContext, ids: Seq[Int]) => ctx.dao.getTeams(ids),
+  val Resolver: DeferredResolver[MyContext] = DeferredResolver.fetchers(playersFetcher)
 
-  )
+  val Id = Argument("id", IntType)
+  val Ids =  Argument("ids", ListInputType(IntType))
 
-  val gamesFetcher = Fetcher(
-    (ctx: MyContext, ids: Seq[Int]) => ctx.dao.getGames(ids)
-  )
-
-  val playerTeamsFetcher: Fetcher[MyContext, PlayerTeam, PlayerTeam, Int] = Fetcher.rel(
-    (ctx: MyContext, ids: Seq[Int]) => ctx.dao.getPlayerTeams(ids),
-    (ctx: MyContext, ids: RelationIds[PlayerTeam]) => ctx.dao.getPlayerTeamsByTeamId(ids)
-  )
-
-  val matchesFetcher = Fetcher(
-    (ctx: MyContext, ids: Seq[Int]) => ctx.dao.getMatches(ids)
-  )
-
-  val Resolver: DeferredResolver[MyContext] = DeferredResolver.fetchers(playersFetcher, teamsFetcher, gamesFetcher, playerTeamsFetcher, matchesFetcher)
-
-    val Id = Argument("id", IntType)
-    val Ids =  Argument("ids", ListInputType(IntType))
-
-    val QueryType = ObjectType(
-      "Query",
-      fields[MyContext, Unit](
-        Field("allPlayers", ListType(PlayerType), resolve = c => c.ctx.dao.allPlayers),
-        Field("player",
-          OptionType(PlayerType),
-          arguments = Id :: Nil,
-          resolve = c => playersFetcher.deferOpt(c.arg(Id))
-        ),
-        Field("players",
-          ListType(PlayerType),
-          arguments = Ids :: Nil,
-          resolve = c => playersFetcher.deferSeq(c.arg(Ids))
-        ),
-        Field("allTeams", ListType(TeamType), resolve = c => c.ctx.dao.allTeams),
-        Field("team",
-          OptionType(TeamType),
-          arguments = Id :: Nil,
-          resolve = c => teamsFetcher.deferOpt(c.arg(Id))
-        ),
-        Field("teams",
-          ListType(TeamType),
-          arguments = Ids :: Nil,
-          resolve = c => teamsFetcher.deferSeq(c.arg(Ids))
-        ),
-        Field("allGames", ListType(GameType), resolve = c => c.ctx.dao.allGames),
-        Field("game",
-          OptionType(GameType),
-          arguments = Id :: Nil,
-          resolve = c => gamesFetcher.deferOpt(c.arg(Id))
-        ),
-        Field("games",
-          ListType(GameType),
-          arguments = Ids :: Nil,
-          resolve = c => gamesFetcher.deferSeq(c.arg(Ids))
-        ),
-        Field("allMatches", ListType(MatchType), resolve = c => c.ctx.dao.allMatches),
-        Field("match",
-          OptionType(MatchType),
-          arguments = Id :: Nil,
-          resolve = c => matchesFetcher.deferOpt(c.arg(Id))
-        ),
-        Field("matches",
-          ListType(MatchType),
-          arguments = Ids :: Nil,
-          resolve = c => matchesFetcher.deferSeq(c.arg(Ids))
-        )
+  val QueryType = ObjectType(
+    "Query",
+    fields[MyContext, Unit](
+      Field("allPlayers", ListType(PlayerType), resolve = c => c.ctx.dao.allPlayers),
+      Field("player",
+        OptionType(PlayerType),
+        arguments = Id :: Nil,
+        resolve = c => playersFetcher.deferOpt(c.arg(Id))
+      ),
+      Field("players",
+        ListType(PlayerType),
+        arguments = Ids :: Nil,
+        resolve = c => playersFetcher.deferSeq(c.arg(Ids))
       )
     )
+  )
 
   val NameArg = Argument("name", StringType)
   val PlayerIdArg = Argument("playerId", IntType)
@@ -163,26 +137,6 @@ object GraphQLSchema {
         PlayerType,
         arguments = NameArg :: Nil,
         resolve = c => c.ctx.dao.createPlayer(c.arg(NameArg))
-      ),
-      Field("createGame",
-        GameType,
-        arguments = NameArg :: Nil,
-        resolve = c => c.ctx.dao.createGame(c.arg(NameArg))
-      ),
-      Field("createTeam",
-        TeamType,
-        arguments = NameArg :: Nil,
-        resolve = c => c.ctx.dao.createTeam(c.arg(NameArg))
-      ),
-      Field("addPlayerToTeam",
-        PlayerTeamType,
-        arguments = PlayerIdArg :: TeamIdArg :: Nil,
-        resolve = c => c.ctx.dao.addPlayerToTeam(c.arg(TeamIdArg), c.arg(PlayerIdArg))
-      ),
-      Field("createMatch",
-        MatchType,
-        arguments = HomeTeamIdArg :: AwayTeamIdArg :: HomeScoreArg :: AwayScoreArg :: GameIdArg :: Nil,
-        resolve = c => c.ctx.dao.createMatch(c.arg(HomeTeamIdArg), c.arg(AwayTeamIdArg), c.arg(HomeScoreArg), c.arg(AwayScoreArg), c.arg(GameIdArg))
       )
     )
   )
