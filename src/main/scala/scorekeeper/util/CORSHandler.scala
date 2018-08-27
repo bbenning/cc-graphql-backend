@@ -29,7 +29,8 @@ trait CORSHandler{
     mapResponseHeaders { headers =>
       allowedOrigin +:
         `Access-Control-Allow-Credentials`(true) +:
-        headers
+        `Access-Control-Allow-Headers`("content-type") +:
+      headers
     }
   }
 
